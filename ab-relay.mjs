@@ -36,6 +36,17 @@ const AGNES_UPSTREAM = 'https://apihub.agnes-ai.cn';
  *（400 model_region_restricted），本容器出口在 FR/DE，可绕开。
  * 路径映射：/coarena/v1/chat/completions -> https://coarena.ai/api/v1/chat/completions */
 const COARENA_UPSTREAM = 'https://coarena.ai/api';
+/* 2026-11-22 新增：NoTrack 出口。
+ * 原因：CN 侧对 notrack.ai / api.notrack.ai 做了 DNS 污染（api 被解析到 31.13.94.41
+ * 这类 Facebook 段 IP），手机和 CF Worker 出口都连不上（HTTP 000 / 超时）。
+ * 本容器在 FR/DE，DNS 干净，可绕开。
+ * 路径映射：
+ *   /notrack/api/v1/* -> https://api.notrack.ai/v1/*     （API key 版，notrack-uncensored）
+ *   /notrack/web/*    -> https://notrack.ai/api/*         （网页版号池后端）
+ *   /notrack/site/*   -> https://notrack.ai/*             （网页版建号/取 cookie）
+ * 仅这三条白名单，不开放任意 host。 */
+const NOTRACK_API_UPSTREAM = 'https://api.notrack.ai';
+const NOTRACK_WEB_UPSTREAM = 'https://notrack.ai';
 const UPSTREAM_TIMEOUT_MS = 180000;
 
 /* 转发前需要剥离的请求头：host 会被重写；x-proxy-key 是本次中转的鉴权头；
@@ -120,11 +131,20 @@ const server = http.createServer((req, res) => {
   } else if (u.startsWith('/coarena/')) {
     upstream = COARENA_UPSTREAM;
     fwdPath = u.slice('/coarena'.length); /* /coarena/v1/chat/... -> /v1/chat/... */
+  } else if (u.startsWith('/notrack/api/')) {
+    upstream = NOTRACK_API_UPSTREAM;
+    fwdPath = u.slice('/notrack/api'.length);      /* /notrack/api/v1/models -> /v1/models */
+  } else if (u.startsWith('/notrack/web/')) {
+    upstream = NOTRACK_WEB_UPSTREAM;
+    fwdPath = u.slice('/notrack/web'.length);      /* /notrack/web/api/dispatch -> /api/dispatch */
+  } else if (u.startsWith('/notrack/site/')) {
+    upstream = NOTRACK_WEB_UPSTREAM;
+    fwdPath = u.slice('/notrack/site'.length);     /* /notrack/site/chat -> /chat */
   } else if (u.startsWith('/v1/')) {
     upstream = AB_UPSTREAM;
     fwdPath = u;
   } else {
-    json(res, 403, { error: 'only /v1/*, /agnes/* or /coarena/* allowed' });
+    json(res, 403, { error: 'only /v1/*, /agnes/*, /coarena/* or /notrack/* allowed' });
     return;
   }
 
@@ -140,5 +160,6 @@ server.listen(PORT, BIND, () => {
   log('ab-relay listening on ' + BIND + ':' + PORT
     + '  /v1/*->' + AB_UPSTREAM
     + '  /agnes/*->' + AGNES_UPSTREAM
-    + '  /coarena/*->' + COARENA_UPSTREAM);
+    + '  /coarena/*->' + COARENA_UPSTREAM
+    + '  /notrack/*->' + NOTRACK_API_UPSTREAM + '|' + NOTRACK_WEB_UPSTREAM);
 });
