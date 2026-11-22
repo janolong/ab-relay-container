@@ -9,11 +9,12 @@
  *   本容器超时 180s，且 req/res 全程 pipe（真 SSE 透传）→ 长流式不再断连。
  *
  * 路由：
- *   POST/GET /v1/*      -> https://api.appbms.com       （AppBMS 生图，ECDSA 签名链路出口）
- *   POST/GET /agnes/*   -> https://apihub.agnes-ai.cn   （Agnes，OpenAI 兼容，换出口 IP 规避 429）
- *   GET      /__ping    -> pong-v3                      （保活用，见 keeper.js）
+ *   POST/GET /v1/*       -> https://api.appbms.com       （AppBMS 生图，ECDSA 签名链路出口）
+ *   POST/GET /agnes/*    -> https://apihub.agnes-ai.cn   （Agnes，OpenAI 兼容，换出口 IP 规避 429）
+ *   POST/GET /coarena/*  -> https://coarena.ai/api       （Coarena 免费模型，绕开 CN 地区限制）
+ *   GET      /__ping     -> pong-v3                      （保活用，见 keeper.js）
  *
- * 鉴权：/v1/* 与 /agnes/* 必须带 X-Proxy-Key，值等于本容器环境变量 RELAY_KEY；
+ * 鉴权：/v1/*、/agnes/*、/coarena/* 必须带 X-Proxy-Key，值等于本容器环境变量 RELAY_KEY；
  *       该头在转发前被剥离，不透传给上游。
  *
  * 环境变量：
@@ -30,6 +31,11 @@ const RELAY_KEY = (process.env.RELAY_KEY || '').trim();
 
 const AB_UPSTREAM = 'https://api.appbms.com';
 const AGNES_UPSTREAM = 'https://apihub.agnes-ai.cn';
+/* 2026-11-22 新增：Coarena 免费模型出口。
+ * 原因：coarena 按来源 IP 判地区，CN 出口拿不到 gpt-6-luna / gemini-3-8-flash
+ *（400 model_region_restricted），本容器出口在 FR/DE，可绕开。
+ * 路径映射：/coarena/v1/chat/completions -> https://coarena.ai/api/v1/chat/completions */
+const COARENA_UPSTREAM = 'https://coarena.ai/api';
 const UPSTREAM_TIMEOUT_MS = 180000;
 
 /* 转发前需要剥离的请求头：host 会被重写；x-proxy-key 是本次中转的鉴权头；
@@ -111,11 +117,14 @@ const server = http.createServer((req, res) => {
   if (u.startsWith('/agnes/')) {
     upstream = AGNES_UPSTREAM;
     fwdPath = u.slice('/agnes'.length); /* /agnes/v1/chat/... -> /v1/chat/... */
+  } else if (u.startsWith('/coarena/')) {
+    upstream = COARENA_UPSTREAM;
+    fwdPath = u.slice('/coarena'.length); /* /coarena/v1/chat/... -> /v1/chat/... */
   } else if (u.startsWith('/v1/')) {
     upstream = AB_UPSTREAM;
     fwdPath = u;
   } else {
-    json(res, 403, { error: 'only /v1/* or /agnes/* allowed' });
+    json(res, 403, { error: 'only /v1/*, /agnes/* or /coarena/* allowed' });
     return;
   }
 
@@ -128,5 +137,8 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, BIND, () => {
-  log('ab-relay listening on ' + BIND + ':' + PORT + '  /v1/*->' + AB_UPSTREAM + '  /agnes/*->' + AGNES_UPSTREAM);
+  log('ab-relay listening on ' + BIND + ':' + PORT
+    + '  /v1/*->' + AB_UPSTREAM
+    + '  /agnes/*->' + AGNES_UPSTREAM
+    + '  /coarena/*->' + COARENA_UPSTREAM);
 });
